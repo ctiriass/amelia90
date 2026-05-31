@@ -1,0 +1,18 @@
+Date: 31/5/2026
+Time: 19:19
+Phone Number: +5531971125714
+Image: C:\Projetos\amelia90\uploads\convite.png
+Caption: Olá, Cássio!É com muita alegria que convidamos você para a comemoração dos 90 anos da Dona Amélia.Sua presença será muito especial para nós.Para confirmar sua presença e informar os nomes dos participantes, acesse o link abaixo:http://127.0.0.1:5000/rsvp/T7ES20Os nomes informados serão encaminhados ao cerimonial para análise e validação.Aguardamos você!
+--------------------
+Date: 31/5/2026
+Time: 19:20
+Phone Number: +5531984220812
+Image: C:\Projetos\amelia90\uploads\convite.png
+Caption: Olá, Jorge!É com muita alegria que convidamos você para a comemoração dos 90 anos da Dona Amélia.Sua presença será muito especial para nós.Para confirmar sua presença e informar os nomes dos participantes, acesse o link abaixo:http://127.0.0.1:5000/rsvp/3NNMS0Os nomes informados serão encaminhados ao cerimonial para análise e validação.Aguardamos você!
+--------------------
+Date: 31/5/2026
+Time: 19:21
+Phone Number: +5531986276797
+Image: C:\Projetos\amelia90\uploads\convite.png
+Caption: Olá, Silvanir!É com muita alegria que convidamos você para a comemoração dos 90 anos da Dona Amélia.Sua presença será muito especial para nós.Para confirmar sua presença e informar os nomes dos participantes, acesse o link abaixo:http://127.0.0.1:5000/rsvp/HEF50AOs nomes informados serão encaminhados ao cerimonial para análise e validação.Aguardamos você!
+--------------------
