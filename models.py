@@ -1,9 +1,9 @@
 import sqlite3
 
+
 def criar_banco():
 
     conexao = sqlite3.connect("banco/amelia90.db")
-
     cursor = conexao.cursor()
 
     cursor.execute("""
@@ -12,6 +12,7 @@ def criar_banco():
         codigo TEXT UNIQUE,
         nome TEXT,
         telefone TEXT,
+        limite INTEGER DEFAULT 1,
         respondeu INTEGER DEFAULT 0
     )
     """)
@@ -35,8 +36,22 @@ def criar_banco():
     )
     """)
 
+    cursor.execute("PRAGMA table_info(convidados)")
+    colunas = [coluna[1] for coluna in cursor.fetchall()]
+
+    if "limite" not in colunas:
+        cursor.execute(
+            "ALTER TABLE convidados ADD COLUMN limite INTEGER DEFAULT 1"
+        )
+
+    if "respondeu" not in colunas:
+        cursor.execute(
+            "ALTER TABLE convidados ADD COLUMN respondeu INTEGER DEFAULT 0"
+        )
+
     conexao.commit()
     conexao.close()
+
 
 if __name__ == "__main__":
     criar_banco()

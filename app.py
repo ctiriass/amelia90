@@ -3,8 +3,10 @@ import sqlite3
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Font, Alignment
+from models import criar_banco
 
 app = Flask(__name__)
+criar_banco()
 
 BASE_URL = "https://amelia90.onrender.com"
 MAPS_LINK = "https://maps.app.goo.gl/T3QYpdr4MEtbXsJ96"
@@ -53,9 +55,7 @@ def listar_convidados(segredo):
     html = f"""
     <h1>Links dos Convidados</h1>
 
-    <p>
-        <a href="/admin/{segredo}">Voltar ao painel</a>
-    </p>
+    <p><a href="/admin/{segredo}">Voltar ao painel</a></p>
 
     <table border="1" cellpadding="8">
         <tr>
