@@ -55,7 +55,7 @@ def listar_convidados():
     """
 
     for id_, codigo, nome, telefone, respondeu in convidados:
-        link = f"http://127.0.0.1:5000/rsvp/{codigo}"
+        link = f"https://amelia90.onrender.com/rsvp/{codigo}"
         html += f"""
         <tr>
             <td>{id_}</td>
