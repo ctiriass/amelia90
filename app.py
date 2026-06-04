@@ -1,4 +1,4 @@
-from flask import Flask, send_from_directory, send_file, request
+from flask import Flask, send_from_directory, send_file, request, redirect
 import sqlite3
 import pandas as pd
 from openpyxl import load_workbook
@@ -6,6 +6,7 @@ from openpyxl.styles import Font, Alignment
 
 app = Flask(__name__)
 
+BASE_URL = "https://amelia90.onrender.com"
 MAPS_LINK = "https://maps.app.goo.gl/T3QYpdr4MEtbXsJ96"
 ADMIN_SECRET = "8F4K2X9P7Q"
 
@@ -19,7 +20,6 @@ def home():
     return """
     <h1>90 Anos da Amélia</h1>
     <p>Sistema RSVP funcionando!</p>
-    <p><a href="/admin/convidados">Ver convidados importados</a></p>
     """
 
 
@@ -29,12 +29,20 @@ def uploads(nome_arquivo):
 
 
 @app.route("/admin/convidados")
-def listar_convidados():
+def convidados_publico():
+    return "<h1>Acesso restrito.</h1>"
+
+
+@app.route("/admin/<segredo>/convidados")
+def listar_convidados(segredo):
+    if segredo != ADMIN_SECRET:
+        return "<h1>Acesso negado.</h1>"
+
     conexao = conectar()
     cursor = conexao.cursor()
 
     cursor.execute("""
-        SELECT id, codigo, nome, telefone, respondeu
+        SELECT id, codigo, nome, telefone, limite, respondeu
         FROM convidados
         ORDER BY nome
     """)
@@ -42,26 +50,33 @@ def listar_convidados():
     convidados = cursor.fetchall()
     conexao.close()
 
-    html = """
-    <h1>Convidados Importados</h1>
+    html = f"""
+    <h1>Links dos Convidados</h1>
+
+    <p>
+        <a href="/admin/{segredo}">Voltar ao painel</a>
+    </p>
+
     <table border="1" cellpadding="8">
         <tr>
             <th>ID</th>
             <th>Código</th>
             <th>Nome</th>
             <th>Telefone</th>
+            <th>Limite</th>
             <th>Link RSVP</th>
         </tr>
     """
 
-    for id_, codigo, nome, telefone, respondeu in convidados:
-        link = f"https://amelia90.onrender.com/rsvp/{codigo}"
+    for id_, codigo, nome, telefone, limite, respondeu in convidados:
+        link = f"{BASE_URL}/rsvp/{codigo}"
         html += f"""
         <tr>
             <td>{id_}</td>
             <td>{codigo}</td>
             <td>{nome}</td>
             <td>{telefone}</td>
+            <td>{limite}</td>
             <td><a href="{link}" target="_blank">{link}</a></td>
         </tr>
         """
@@ -182,7 +197,7 @@ def confirmar(codigo):
     cursor = conexao.cursor()
 
     cursor.execute("""
-        SELECT id, nome, respondeu
+        SELECT id, nome, respondeu, limite
         FROM convidados
         WHERE codigo = ?
     """, (codigo,))
@@ -193,7 +208,8 @@ def confirmar(codigo):
         conexao.close()
         return "<h1>Convite não encontrado.</h1>"
 
-    convidado_id, nome_convidado, respondeu = convidado
+    convidado_id, nome_convidado, respondeu, limite = convidado
+    limite = int(limite or 1)
 
     if respondeu == 1:
         conexao.close()
@@ -209,6 +225,29 @@ def confirmar(codigo):
     if request.method == "POST":
         observacoes = request.form.get("observacoes", "")
 
+        nomes = request.form.getlist("nome[]")
+        tipos = request.form.getlist("tipo[]")
+        idades = request.form.getlist("idade[]")
+
+        nomes_validos = [n.strip() for n in nomes if n.strip()]
+
+        if len(nomes_validos) > limite:
+            conexao.close()
+            return f"""
+            <h1>Limite excedido</h1>
+            <p>Este convite permite informar até {limite} participante(s).</p>
+            <p>Volte e ajuste a lista antes de enviar.</p>
+            """
+
+        for nome, tipo, idade in zip(nomes, tipos, idades):
+            if tipo == "Crianca" and not str(idade).strip():
+                conexao.close()
+                return """
+                <h1>Idade obrigatória</h1>
+                <p>Para crianças, informe a idade antes de enviar.</p>
+                <p>Volte e ajuste o formulário.</p>
+                """
+
         cursor.execute("""
             INSERT INTO confirmacoes
             (convidado_id, observacoes)
@@ -216,10 +255,6 @@ def confirmar(codigo):
         """, (convidado_id, observacoes))
 
         confirmacao_id = cursor.lastrowid
-
-        nomes = request.form.getlist("nome[]")
-        tipos = request.form.getlist("tipo[]")
-        idades = request.form.getlist("idade[]")
 
         for nome, tipo, idade in zip(nomes, tipos, idades):
             nome = nome.strip()
@@ -316,8 +351,17 @@ def confirmar(codigo):
         </style>
 
         <script>
+            const LIMITE = {limite};
+
             function adicionarParticipante() {{
                 let container = document.getElementById("participantes");
+                let total = container.getElementsByClassName("participante").length;
+
+                if (total >= LIMITE) {{
+                    alert("Este convite permite informar até " + LIMITE + " participante(s).");
+                    return;
+                }}
+
                 let bloco = document.createElement("div");
                 bloco.className = "participante";
 
@@ -347,6 +391,11 @@ def confirmar(codigo):
             <p>
                 Convite vinculado a:
                 <strong>{nome_convidado}</strong>
+            </p>
+
+            <p>
+                Este convite permite informar até
+                <strong>{limite}</strong> participante(s).
             </p>
 
             <form method="POST">
@@ -395,12 +444,31 @@ def admin(segredo):
     conexao = conectar()
     cursor = conexao.cursor()
 
+    cursor.execute("SELECT COUNT(*) FROM convidados")
+    total_convidados = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM convidados WHERE respondeu = 1")
+    total_responderam = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM convidados WHERE respondeu = 0")
+    total_pendentes = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM participantes")
+    total_participantes = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM participantes WHERE tipo = 'Adulto'")
+    total_adultos = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM participantes WHERE tipo = 'Crianca'")
+    total_criancas = cursor.fetchone()[0]
+
     cursor.execute("""
         SELECT 
             c.id,
             c.nome,
             c.telefone,
             c.codigo,
+            c.limite,
             c.respondeu,
             COUNT(p.id) as total_participantes
         FROM convidados c
@@ -416,6 +484,20 @@ def admin(segredo):
     html = f"""
     <h1>Painel Administrativo - 90 Anos da Amélia</h1>
 
+    <h2>Resumo</h2>
+    <ul>
+        <li>Total de convites: {total_convidados}</li>
+        <li>Responderam: {total_responderam}</li>
+        <li>Pendentes: {total_pendentes}</li>
+        <li>Participantes informados: {total_participantes}</li>
+        <li>Adultos informados: {total_adultos}</li>
+        <li>Crianças informadas: {total_criancas}</li>
+    </ul>
+
+    <p>
+        <a href="/admin/{segredo}/convidados">Ver links dos convidados</a>
+    </p>
+
     <p>
         <a href="/admin/{segredo}/exportar">
             Exportar Lista para Excel
@@ -426,24 +508,46 @@ def admin(segredo):
         <tr>
             <th>Convidado</th>
             <th>Telefone</th>
-            <th>Respondeu?</th>
-            <th>Participantes</th>
-            <th>Detalhes</th>
+            <th>Limite</th>
+            <th>Confirmados / Limite</th>
+            <th>Vagas restantes</th>
+            <th>Status</th>
+            <th>Ações</th>
         </tr>
     """
 
-    for id_, nome, telefone, codigo, respondeu, total in registros:
-        status = "Sim" if respondeu else "Não"
+    for id_, nome, telefone, codigo, limite, respondeu, total in registros:
+        limite = int(limite or 1)
+        total = int(total or 0)
+        restantes = max(limite - total, 0)
+
+        if not respondeu:
+            status = "Pendente"
+        elif total >= limite:
+            status = "Completo"
+        else:
+            status = "Parcial"
 
         html += f"""
         <tr>
             <td>{nome}</td>
             <td>{telefone}</td>
+            <td>{limite}</td>
+            <td>{total} / {limite}</td>
+            <td>{restantes}</td>
             <td>{status}</td>
-            <td>{total}</td>
             <td>
                 <a href="/admin/{segredo}/convidado/{id_}">
                     Ver detalhes
+                </a>
+                |
+                <a href="/admin/{segredo}/convidado/{id_}/limite">
+                    Alterar limite
+                </a>
+                |
+                <a href="/admin/{segredo}/convidado/{id_}/resetar"
+                   onclick="return confirm('Tem certeza que deseja limpar a confirmação deste convidado?');">
+                    Limpar confirmação
                 </a>
             </td>
         </tr>
@@ -462,12 +566,16 @@ def detalhes_convidado(segredo, convidado_id):
     cursor = conexao.cursor()
 
     cursor.execute("""
-        SELECT nome, telefone
+        SELECT nome, telefone, limite
         FROM convidados
         WHERE id = ?
     """, (convidado_id,))
 
     convidado = cursor.fetchone()
+
+    if not convidado:
+        conexao.close()
+        return "<h1>Convidado não encontrado.</h1>"
 
     cursor.execute("""
         SELECT id, observacoes, data_confirmacao
@@ -480,7 +588,23 @@ def detalhes_convidado(segredo, convidado_id):
 
     if not confirmacao:
         conexao.close()
-        return "<h1>Este convidado ainda não respondeu.</h1>"
+        return f"""
+        <h1>Este convidado ainda não respondeu.</h1>
+
+        <p><strong>Convidado:</strong> {convidado[0]}</p>
+        <p><strong>Telefone:</strong> {convidado[1]}</p>
+        <p><strong>Limite:</strong> {convidado[2]}</p>
+
+        <p>
+            <a href="/admin/{segredo}/convidado/{convidado_id}/limite">
+                Alterar limite
+            </a>
+        </p>
+
+        <p>
+            <a href="/admin/{segredo}">Voltar ao painel</a>
+        </p>
+        """
 
     confirmacao_id, observacoes, data = confirmacao
 
@@ -494,11 +618,18 @@ def detalhes_convidado(segredo, convidado_id):
     participantes = cursor.fetchall()
     conexao.close()
 
+    total_participantes = len(participantes)
+    limite = int(convidado[2] or 1)
+    restantes = max(limite - total_participantes, 0)
+
     html = f"""
     <h1>Detalhes da Confirmação</h1>
 
     <p><strong>Convidado:</strong> {convidado[0]}</p>
     <p><strong>Telefone:</strong> {convidado[1]}</p>
+    <p><strong>Limite:</strong> {limite}</p>
+    <p><strong>Confirmados:</strong> {total_participantes} / {limite}</p>
+    <p><strong>Vagas restantes:</strong> {restantes}</p>
     <p><strong>Data:</strong> {data}</p>
 
     <h2>Participantes informados</h2>
@@ -518,11 +649,131 @@ def detalhes_convidado(segredo, convidado_id):
     <p>{observacoes or "Nenhuma observação."}</p>
 
     <p>
+        <a href="/admin/{segredo}/convidado/{convidado_id}/limite">
+            Alterar limite
+        </a>
+    </p>
+
+    <p>
+        <a href="/admin/{segredo}/convidado/{convidado_id}/resetar"
+           onclick="return confirm('Tem certeza que deseja limpar esta confirmação?');">
+            Limpar confirmação deste convidado
+        </a>
+    </p>
+
+    <p>
         <a href="/admin/{segredo}">Voltar ao painel</a>
     </p>
     """
 
     return html
+
+
+@app.route("/admin/<segredo>/convidado/<int:convidado_id>/limite", methods=["GET", "POST"])
+def alterar_limite(segredo, convidado_id):
+    if segredo != ADMIN_SECRET:
+        return "<h1>Acesso negado.</h1>"
+
+    conexao = conectar()
+    cursor = conexao.cursor()
+
+    cursor.execute("""
+        SELECT nome, telefone, limite
+        FROM convidados
+        WHERE id = ?
+    """, (convidado_id,))
+
+    convidado = cursor.fetchone()
+
+    if not convidado:
+        conexao.close()
+        return "<h1>Convidado não encontrado.</h1>"
+
+    nome, telefone, limite_atual = convidado
+
+    if request.method == "POST":
+        novo_limite = request.form.get("limite", "1")
+
+        try:
+            novo_limite = int(novo_limite)
+        except ValueError:
+            novo_limite = 1
+
+        if novo_limite < 1:
+            novo_limite = 1
+
+        cursor.execute("""
+            UPDATE convidados
+            SET limite = ?
+            WHERE id = ?
+        """, (novo_limite, convidado_id))
+
+        conexao.commit()
+        conexao.close()
+
+        return redirect(f"/admin/{segredo}")
+
+    conexao.close()
+
+    return f"""
+    <h1>Alterar Limite</h1>
+
+    <p><strong>Convidado:</strong> {nome}</p>
+    <p><strong>Telefone:</strong> {telefone}</p>
+    <p><strong>Limite atual:</strong> {limite_atual}</p>
+
+    <form method="POST">
+        <label>Novo limite de participantes:</label><br>
+        <input type="number" name="limite" min="1" value="{limite_atual}" required>
+        <br><br>
+        <button type="submit">Salvar novo limite</button>
+    </form>
+
+    <p>
+        <a href="/admin/{segredo}">Voltar ao painel</a>
+    </p>
+    """
+
+
+@app.route("/admin/<segredo>/convidado/<int:convidado_id>/resetar")
+def resetar_convidado(segredo, convidado_id):
+    if segredo != ADMIN_SECRET:
+        return "<h1>Acesso negado.</h1>"
+
+    conexao = conectar()
+    cursor = conexao.cursor()
+
+    cursor.execute("""
+        SELECT id
+        FROM confirmacoes
+        WHERE convidado_id = ?
+    """, (convidado_id,))
+
+    confirmacoes = cursor.fetchall()
+
+    for confirmacao in confirmacoes:
+        confirmacao_id = confirmacao[0]
+
+        cursor.execute("""
+            DELETE FROM participantes
+            WHERE confirmacao_id = ?
+        """, (confirmacao_id,))
+
+    cursor.execute("""
+        DELETE FROM confirmacoes
+        WHERE convidado_id = ?
+    """, (convidado_id,))
+
+    cursor.execute("""
+        UPDATE convidados
+        SET respondeu = 0
+        WHERE id = ?
+    """, (convidado_id,))
+
+    conexao.commit()
+    conexao.close()
+
+    return redirect(f"/admin/{segredo}")
 
 
 @app.route("/admin/<segredo>/exportar")
@@ -570,14 +821,28 @@ def exportar_excel(segredo):
 
     caminho = "exportacoes/lista_portaria.xlsx"
 
+    colunas_lista = [
+        "Nome",
+        "Tipo",
+        "Idade",
+        "Convidado de origem",
+        "Data da confirmação"
+    ]
+
+    colunas_criancas = [
+        "Nome",
+        "Idade",
+        "Convidado de origem"
+    ]
+
     with pd.ExcelWriter(caminho, engine="openpyxl") as writer:
-        pd.DataFrame(lista_completa).to_excel(
+        pd.DataFrame(lista_completa, columns=colunas_lista).to_excel(
             writer,
             sheet_name="Lista Portaria",
             index=False
         )
 
-        pd.DataFrame(criancas).to_excel(
+        pd.DataFrame(criancas, columns=colunas_criancas).to_excel(
             writer,
             sheet_name="Crianças",
             index=False
