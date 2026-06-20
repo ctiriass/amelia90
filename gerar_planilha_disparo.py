@@ -1,10 +1,12 @@
 import sqlite3
 import pandas as pd
 
-BASE_URL = "http://127.0.0.1:5000"
+BASE_URL = "https://amelia90.onrender.com"
+
 
 def conectar():
     return sqlite3.connect("banco/amelia90.db")
+
 
 def montar_mensagem(nome, codigo):
     link = f"{BASE_URL}/rsvp/{codigo}"
@@ -23,11 +25,12 @@ Os nomes informados serão encaminhados ao cerimonial para análise e validaçã
 
 Aguardamos você!"""
 
+
 conexao = conectar()
 cursor = conexao.cursor()
 
 cursor.execute("""
-    SELECT nome, telefone, codigo
+    SELECT nome, telefone, codigo, limite
     FROM convidados
     ORDER BY nome
 """)
@@ -37,13 +40,14 @@ conexao.close()
 
 linhas = []
 
-for nome, telefone, codigo in dados:
+for nome, telefone, codigo, limite in dados:
     link = f"{BASE_URL}/rsvp/{codigo}"
 
     linhas.append({
         "Nome": nome,
         "Telefone": telefone,
         "Código": codigo,
+        "Limite": limite,
         "Link RSVP": link,
         "Mensagem WhatsApp": montar_mensagem(nome, codigo)
     })
