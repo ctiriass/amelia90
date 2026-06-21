@@ -1,20 +1,53 @@
 from flask import Flask, send_from_directory, send_file, request, redirect
-import sqlite3
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Font, Alignment
-from models import criar_banco
+import requests
 
 app = Flask(__name__)
-criar_banco()
 
 BASE_URL = "https://amelia90.onrender.com"
 MAPS_LINK = "https://maps.app.goo.gl/T3QYpdr4MEtbXsJ96"
 ADMIN_SECRET = "8F4K2X9P7Q"
 
+SUPABASE_URL = "https://oqfokoxdnwvfbkvzeqew.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9xZm9rb3hkbnd2ZmJrdnplcWV3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MDc5NDEsImV4cCI6MjA5NjE4Mzk0MX0.JuC0RPkYZlUJM7itCVOAQCV_-XFv2v2ZkOVqeMe3Q-c"
 
-def conectar():
-    return sqlite3.connect("banco/amelia90.db")
+
+def supabase_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+
+
+def supabase_get(tabela, query=""):
+    url = f"{SUPABASE_URL}/rest/v1/{tabela}{query}"
+    r = requests.get(url, headers=supabase_headers())
+    r.raise_for_status()
+    return r.json()
+
+
+def supabase_post(tabela, dados):
+    url = f"{SUPABASE_URL}/rest/v1/{tabela}"
+    r = requests.post(url, headers=supabase_headers(), json=dados)
+    r.raise_for_status()
+    return r.json()
+
+
+def supabase_patch(tabela, filtro, dados):
+    url = f"{SUPABASE_URL}/rest/v1/{tabela}{filtro}"
+    r = requests.patch(url, headers=supabase_headers(), json=dados)
+    r.raise_for_status()
+    return r.json()
+
+
+def supabase_delete(tabela, filtro):
+    url = f"{SUPABASE_URL}/rest/v1/{tabela}{filtro}"
+    r = requests.delete(url, headers=supabase_headers())
+    r.raise_for_status()
 
 
 @app.route("/")
@@ -40,17 +73,7 @@ def listar_convidados(segredo):
     if segredo != ADMIN_SECRET:
         return "<h1>Acesso negado.</h1>"
 
-    conexao = conectar()
-    cursor = conexao.cursor()
-
-    cursor.execute("""
-        SELECT id, codigo, nome, telefone, limite, respondeu
-        FROM convidados
-        ORDER BY nome
-    """)
-
-    convidados = cursor.fetchall()
-    conexao.close()
+    convidados = supabase_get("convidados", "?select=*&order=nome.asc")
 
     html = f"""
     <h1>Links dos Convidados</h1>
@@ -68,15 +91,15 @@ def listar_convidados(segredo):
         </tr>
     """
 
-    for id_, codigo, nome, telefone, limite, respondeu in convidados:
-        link = f"{BASE_URL}/rsvp/{codigo}"
+    for c in convidados:
+        link = f"{BASE_URL}/rsvp/{c['codigo']}"
         html += f"""
         <tr>
-            <td>{id_}</td>
-            <td>{codigo}</td>
-            <td>{nome}</td>
-            <td>{telefone}</td>
-            <td>{limite}</td>
+            <td>{c['id']}</td>
+            <td>{c['codigo']}</td>
+            <td>{c.get('nome', '')}</td>
+            <td>{c.get('telefone', '')}</td>
+            <td>{c.get('limite', 1)}</td>
             <td><a href="{link}" target="_blank">{link}</a></td>
         </tr>
         """
@@ -87,22 +110,13 @@ def listar_convidados(segredo):
 
 @app.route("/rsvp/<codigo>")
 def rsvp(codigo):
-    conexao = conectar()
-    cursor = conexao.cursor()
+    convidados = supabase_get("convidados", f"?codigo=eq.{codigo}&select=*")
 
-    cursor.execute("""
-        SELECT id, nome, respondeu
-        FROM convidados
-        WHERE codigo = ?
-    """, (codigo,))
-
-    convidado = cursor.fetchone()
-    conexao.close()
-
-    if not convidado:
+    if not convidados:
         return "<h1>Convite não encontrado.</h1>"
 
-    id_, nome, respondeu = convidado
+    convidado = convidados[0]
+    nome = convidado.get("nome", "")
 
     return f"""
     <!DOCTYPE html>
@@ -193,26 +207,18 @@ def rsvp(codigo):
 
 @app.route("/rsvp/<codigo>/confirmar", methods=["GET", "POST"])
 def confirmar(codigo):
-    conexao = conectar()
-    cursor = conexao.cursor()
+    convidados = supabase_get("convidados", f"?codigo=eq.{codigo}&select=*")
 
-    cursor.execute("""
-        SELECT id, nome, respondeu, limite
-        FROM convidados
-        WHERE codigo = ?
-    """, (codigo,))
-
-    convidado = cursor.fetchone()
-
-    if not convidado:
-        conexao.close()
+    if not convidados:
         return "<h1>Convite não encontrado.</h1>"
 
-    convidado_id, nome_convidado, respondeu, limite = convidado
-    limite = int(limite or 1)
+    convidado = convidados[0]
+    convidado_id = convidado["id"]
+    nome_convidado = convidado.get("nome", "")
+    respondeu = convidado.get("respondeu", False)
+    limite = int(convidado.get("limite") or 1)
 
-    if respondeu == 1:
-        conexao.close()
+    if respondeu:
         return """
         <h1>Confirmação já registrada</h1>
         <p>Sua solicitação já foi registrada anteriormente.</p>
@@ -232,7 +238,6 @@ def confirmar(codigo):
         nomes_validos = [n.strip() for n in nomes if n.strip()]
 
         if len(nomes_validos) > limite:
-            conexao.close()
             return f"""
             <h1>Limite excedido</h1>
             <p>Este convite permite informar até {limite} participante(s).</p>
@@ -241,20 +246,20 @@ def confirmar(codigo):
 
         for nome, tipo, idade in zip(nomes, tipos, idades):
             if tipo == "Crianca" and not str(idade).strip():
-                conexao.close()
                 return """
                 <h1>Idade obrigatória</h1>
                 <p>Para crianças, informe a idade antes de enviar.</p>
                 <p>Volte e ajuste o formulário.</p>
                 """
 
-        cursor.execute("""
-            INSERT INTO confirmacoes
-            (convidado_id, observacoes)
-            VALUES (?, ?)
-        """, (convidado_id, observacoes))
+        confirmacao = supabase_post("confirmacoes", {
+            "convidado_id": convidado_id,
+            "observacoes": observacoes
+        })[0]
 
-        confirmacao_id = cursor.lastrowid
+        confirmacao_id = confirmacao["id"]
+
+        participantes = []
 
         for nome, tipo, idade in zip(nomes, tipos, idades):
             nome = nome.strip()
@@ -267,20 +272,21 @@ def confirmar(codigo):
             if tipo == "Crianca" and idade:
                 idade_final = int(idade)
 
-            cursor.execute("""
-                INSERT INTO participantes
-                (confirmacao_id, nome, tipo, idade)
-                VALUES (?, ?, ?, ?)
-            """, (confirmacao_id, nome, tipo, idade_final))
+            participantes.append({
+                "confirmacao_id": confirmacao_id,
+                "nome": nome,
+                "tipo": tipo,
+                "idade": idade_final
+            })
 
-        cursor.execute("""
-            UPDATE convidados
-            SET respondeu = 1
-            WHERE id = ?
-        """, (convidado_id,))
+        if participantes:
+            supabase_post("participantes", participantes)
 
-        conexao.commit()
-        conexao.close()
+        supabase_patch(
+            "convidados",
+            f"?id=eq.{convidado_id}",
+            {"respondeu": True}
+        )
 
         return """
         <h1>Solicitação recebida com sucesso!</h1>
@@ -297,8 +303,6 @@ def confirmar(codigo):
         efetivamente confirmados.
         </p>
         """
-
-    conexao.close()
 
     return f"""
     <!DOCTYPE html>
@@ -441,45 +445,24 @@ def admin(segredo):
     if segredo != ADMIN_SECRET:
         return "<h1>Acesso negado.</h1>"
 
-    conexao = conectar()
-    cursor = conexao.cursor()
+    convidados = supabase_get("convidados", "?select=*&order=nome.asc")
+    confirmacoes = supabase_get("confirmacoes", "?select=*")
+    participantes = supabase_get("participantes", "?select=*")
 
-    cursor.execute("SELECT COUNT(*) FROM convidados")
-    total_convidados = cursor.fetchone()[0]
+    total_convidados = len(convidados)
+    total_responderam = len([c for c in convidados if c.get("respondeu")])
+    total_pendentes = total_convidados - total_responderam
+    total_participantes = len(participantes)
+    total_adultos = len([p for p in participantes if p.get("tipo") == "Adulto"])
+    total_criancas = len([p for p in participantes if p.get("tipo") == "Crianca"])
 
-    cursor.execute("SELECT COUNT(*) FROM convidados WHERE respondeu = 1")
-    total_responderam = cursor.fetchone()[0]
+    confirmacoes_por_convidado = {}
+    for cf in confirmacoes:
+        confirmacoes_por_convidado.setdefault(cf["convidado_id"], []).append(cf["id"])
 
-    cursor.execute("SELECT COUNT(*) FROM convidados WHERE respondeu = 0")
-    total_pendentes = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM participantes")
-    total_participantes = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM participantes WHERE tipo = 'Adulto'")
-    total_adultos = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM participantes WHERE tipo = 'Crianca'")
-    total_criancas = cursor.fetchone()[0]
-
-    cursor.execute("""
-        SELECT 
-            c.id,
-            c.nome,
-            c.telefone,
-            c.codigo,
-            c.limite,
-            c.respondeu,
-            COUNT(p.id) as total_participantes
-        FROM convidados c
-        LEFT JOIN confirmacoes cf ON cf.convidado_id = c.id
-        LEFT JOIN participantes p ON p.confirmacao_id = cf.id
-        GROUP BY c.id
-        ORDER BY c.nome
-    """)
-
-    registros = cursor.fetchall()
-    conexao.close()
+    participantes_por_confirmacao = {}
+    for p in participantes:
+        participantes_por_confirmacao.setdefault(p["confirmacao_id"], []).append(p)
 
     html = f"""
     <h1>Painel Administrativo - 90 Anos da Amélia</h1>
@@ -516,12 +499,18 @@ def admin(segredo):
         </tr>
     """
 
-    for id_, nome, telefone, codigo, limite, respondeu, total in registros:
-        limite = int(limite or 1)
-        total = int(total or 0)
+    for c in convidados:
+        convidado_id = c["id"]
+        limite = int(c.get("limite") or 1)
+
+        confirmacao_ids = confirmacoes_por_convidado.get(convidado_id, [])
+        total = 0
+        for cf_id in confirmacao_ids:
+            total += len(participantes_por_confirmacao.get(cf_id, []))
+
         restantes = max(limite - total, 0)
 
-        if not respondeu:
+        if not c.get("respondeu"):
             status = "Pendente"
         elif total >= limite:
             status = "Completo"
@@ -530,22 +519,22 @@ def admin(segredo):
 
         html += f"""
         <tr>
-            <td>{nome}</td>
-            <td>{telefone}</td>
+            <td>{c.get('nome', '')}</td>
+            <td>{c.get('telefone', '')}</td>
             <td>{limite}</td>
             <td>{total} / {limite}</td>
             <td>{restantes}</td>
             <td>{status}</td>
             <td>
-                <a href="/admin/{segredo}/convidado/{id_}">
+                <a href="/admin/{segredo}/convidado/{convidado_id}">
                     Ver detalhes
                 </a>
                 |
-                <a href="/admin/{segredo}/convidado/{id_}/limite">
+                <a href="/admin/{segredo}/convidado/{convidado_id}/limite">
                     Alterar limite
                 </a>
                 |
-                <a href="/admin/{segredo}/convidado/{id_}/resetar"
+                <a href="/admin/{segredo}/convidado/{convidado_id}/resetar"
                    onclick="return confirm('Tem certeza que deseja limpar a confirmação deste convidado?');">
                     Limpar confirmação
                 </a>
@@ -562,38 +551,25 @@ def detalhes_convidado(segredo, convidado_id):
     if segredo != ADMIN_SECRET:
         return "<h1>Acesso negado.</h1>"
 
-    conexao = conectar()
-    cursor = conexao.cursor()
+    convidados = supabase_get("convidados", f"?id=eq.{convidado_id}&select=*")
 
-    cursor.execute("""
-        SELECT nome, telefone, limite
-        FROM convidados
-        WHERE id = ?
-    """, (convidado_id,))
-
-    convidado = cursor.fetchone()
-
-    if not convidado:
-        conexao.close()
+    if not convidados:
         return "<h1>Convidado não encontrado.</h1>"
 
-    cursor.execute("""
-        SELECT id, observacoes, data_confirmacao
-        FROM confirmacoes
-        WHERE convidado_id = ?
-        ORDER BY id DESC
-    """, (convidado_id,))
+    convidado = convidados[0]
 
-    confirmacao = cursor.fetchone()
+    confirmacoes = supabase_get(
+        "confirmacoes",
+        f"?convidado_id=eq.{convidado_id}&select=*&order=id.desc"
+    )
 
-    if not confirmacao:
-        conexao.close()
+    if not confirmacoes:
         return f"""
         <h1>Este convidado ainda não respondeu.</h1>
 
-        <p><strong>Convidado:</strong> {convidado[0]}</p>
-        <p><strong>Telefone:</strong> {convidado[1]}</p>
-        <p><strong>Limite:</strong> {convidado[2]}</p>
+        <p><strong>Convidado:</strong> {convidado.get('nome', '')}</p>
+        <p><strong>Telefone:</strong> {convidado.get('telefone', '')}</p>
+        <p><strong>Limite:</strong> {convidado.get('limite', 1)}</p>
 
         <p>
             <a href="/admin/{segredo}/convidado/{convidado_id}/limite">
@@ -606,47 +582,43 @@ def detalhes_convidado(segredo, convidado_id):
         </p>
         """
 
-    confirmacao_id, observacoes, data = confirmacao
+    confirmacao = confirmacoes[0]
+    confirmacao_id = confirmacao["id"]
 
-    cursor.execute("""
-        SELECT nome, tipo, idade
-        FROM participantes
-        WHERE confirmacao_id = ?
-        ORDER BY id
-    """, (confirmacao_id,))
-
-    participantes = cursor.fetchall()
-    conexao.close()
+    participantes = supabase_get(
+        "participantes",
+        f"?confirmacao_id=eq.{confirmacao_id}&select=*&order=id.asc"
+    )
 
     total_participantes = len(participantes)
-    limite = int(convidado[2] or 1)
+    limite = int(convidado.get("limite") or 1)
     restantes = max(limite - total_participantes, 0)
 
     html = f"""
     <h1>Detalhes da Confirmação</h1>
 
-    <p><strong>Convidado:</strong> {convidado[0]}</p>
-    <p><strong>Telefone:</strong> {convidado[1]}</p>
+    <p><strong>Convidado:</strong> {convidado.get('nome', '')}</p>
+    <p><strong>Telefone:</strong> {convidado.get('telefone', '')}</p>
     <p><strong>Limite:</strong> {limite}</p>
     <p><strong>Confirmados:</strong> {total_participantes} / {limite}</p>
     <p><strong>Vagas restantes:</strong> {restantes}</p>
-    <p><strong>Data:</strong> {data}</p>
+    <p><strong>Data:</strong> {confirmacao.get('data_confirmacao', '')}</p>
 
     <h2>Participantes informados</h2>
     <ul>
     """
 
-    for nome, tipo, idade in participantes:
-        if tipo == "Crianca" and idade:
-            html += f"<li>{nome} - Criança, {idade} anos</li>"
+    for p in participantes:
+        if p.get("tipo") == "Crianca" and p.get("idade"):
+            html += f"<li>{p.get('nome', '')} - Criança, {p.get('idade')} anos</li>"
         else:
-            html += f"<li>{nome} - Adulto</li>"
+            html += f"<li>{p.get('nome', '')} - Adulto</li>"
 
     html += f"""
     </ul>
 
     <h2>Observações</h2>
-    <p>{observacoes or "Nenhuma observação."}</p>
+    <p>{confirmacao.get('observacoes') or "Nenhuma observação."}</p>
 
     <p>
         <a href="/admin/{segredo}/convidado/{convidado_id}/limite">
@@ -674,22 +646,12 @@ def alterar_limite(segredo, convidado_id):
     if segredo != ADMIN_SECRET:
         return "<h1>Acesso negado.</h1>"
 
-    conexao = conectar()
-    cursor = conexao.cursor()
+    convidados = supabase_get("convidados", f"?id=eq.{convidado_id}&select=*")
 
-    cursor.execute("""
-        SELECT nome, telefone, limite
-        FROM convidados
-        WHERE id = ?
-    """, (convidado_id,))
-
-    convidado = cursor.fetchone()
-
-    if not convidado:
-        conexao.close()
+    if not convidados:
         return "<h1>Convidado não encontrado.</h1>"
 
-    nome, telefone, limite_atual = convidado
+    convidado = convidados[0]
 
     if request.method == "POST":
         novo_limite = request.form.get("limite", "1")
@@ -702,29 +664,24 @@ def alterar_limite(segredo, convidado_id):
         if novo_limite < 1:
             novo_limite = 1
 
-        cursor.execute("""
-            UPDATE convidados
-            SET limite = ?
-            WHERE id = ?
-        """, (novo_limite, convidado_id))
-
-        conexao.commit()
-        conexao.close()
+        supabase_patch(
+            "convidados",
+            f"?id=eq.{convidado_id}",
+            {"limite": novo_limite}
+        )
 
         return redirect(f"/admin/{segredo}")
-
-    conexao.close()
 
     return f"""
     <h1>Alterar Limite</h1>
 
-    <p><strong>Convidado:</strong> {nome}</p>
-    <p><strong>Telefone:</strong> {telefone}</p>
-    <p><strong>Limite atual:</strong> {limite_atual}</p>
+    <p><strong>Convidado:</strong> {convidado.get('nome', '')}</p>
+    <p><strong>Telefone:</strong> {convidado.get('telefone', '')}</p>
+    <p><strong>Limite atual:</strong> {convidado.get('limite', 1)}</p>
 
     <form method="POST">
         <label>Novo limite de participantes:</label><br>
-        <input type="number" name="limite" min="1" value="{limite_atual}" required>
+        <input type="number" name="limite" min="1" value="{convidado.get('limite', 1)}" required>
         <br><br>
         <button type="submit">Salvar novo limite</button>
     </form>
@@ -740,38 +697,21 @@ def resetar_convidado(segredo, convidado_id):
     if segredo != ADMIN_SECRET:
         return "<h1>Acesso negado.</h1>"
 
-    conexao = conectar()
-    cursor = conexao.cursor()
+    confirmacoes = supabase_get(
+        "confirmacoes",
+        f"?convidado_id=eq.{convidado_id}&select=*"
+    )
 
-    cursor.execute("""
-        SELECT id
-        FROM confirmacoes
-        WHERE convidado_id = ?
-    """, (convidado_id,))
+    for cf in confirmacoes:
+        supabase_delete("participantes", f"?confirmacao_id=eq.{cf['id']}")
 
-    confirmacoes = cursor.fetchall()
+    supabase_delete("confirmacoes", f"?convidado_id=eq.{convidado_id}")
 
-    for confirmacao in confirmacoes:
-        confirmacao_id = confirmacao[0]
-
-        cursor.execute("""
-            DELETE FROM participantes
-            WHERE confirmacao_id = ?
-        """, (confirmacao_id,))
-
-    cursor.execute("""
-        DELETE FROM confirmacoes
-        WHERE convidado_id = ?
-    """, (convidado_id,))
-
-    cursor.execute("""
-        UPDATE convidados
-        SET respondeu = 0
-        WHERE id = ?
-    """, (convidado_id,))
-
-    conexao.commit()
-    conexao.close()
+    supabase_patch(
+        "convidados",
+        f"?id=eq.{convidado_id}",
+        {"respondeu": False}
+    )
 
     return redirect(f"/admin/{segredo}")
 
@@ -781,42 +721,35 @@ def exportar_excel(segredo):
     if segredo != ADMIN_SECRET:
         return "<h1>Acesso negado.</h1>"
 
-    conexao = conectar()
-    cursor = conexao.cursor()
+    convidados = supabase_get("convidados", "?select=*")
+    confirmacoes = supabase_get("confirmacoes", "?select=*")
+    participantes = supabase_get("participantes", "?select=*")
 
-    cursor.execute("""
-        SELECT 
-            c.nome as convidado,
-            p.nome as participante,
-            p.tipo,
-            p.idade,
-            cf.data_confirmacao
-        FROM participantes p
-        INNER JOIN confirmacoes cf ON cf.id = p.confirmacao_id
-        INNER JOIN convidados c ON c.id = cf.convidado_id
-        ORDER BY p.nome
-    """)
-
-    dados = cursor.fetchall()
-    conexao.close()
+    convidados_por_id = {c["id"]: c for c in convidados}
+    confirmacoes_por_id = {cf["id"]: cf for cf in confirmacoes}
 
     lista_completa = []
     criancas = []
 
-    for convidado, participante, tipo, idade, data in dados:
-        lista_completa.append({
-            "Nome": participante,
-            "Tipo": tipo,
-            "Idade": idade if idade else "",
-            "Convidado de origem": convidado,
-            "Data da confirmação": data
-        })
+    for p in participantes:
+        cf = confirmacoes_por_id.get(p["confirmacao_id"], {})
+        convidado = convidados_por_id.get(cf.get("convidado_id"), {})
 
-        if tipo == "Crianca":
+        linha = {
+            "Nome": p.get("nome", ""),
+            "Tipo": p.get("tipo", ""),
+            "Idade": p.get("idade") or "",
+            "Convidado de origem": convidado.get("nome", ""),
+            "Data da confirmação": cf.get("data_confirmacao", "")
+        }
+
+        lista_completa.append(linha)
+
+        if p.get("tipo") == "Crianca":
             criancas.append({
-                "Nome": participante,
-                "Idade": idade if idade else "",
-                "Convidado de origem": convidado
+                "Nome": p.get("nome", ""),
+                "Idade": p.get("idade") or "",
+                "Convidado de origem": convidado.get("nome", "")
             })
 
     caminho = "exportacoes/lista_portaria.xlsx"
